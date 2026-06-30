@@ -28,6 +28,24 @@ node ninebot-arcadia.js
 
 Arcadia 中建议配置为定时任务运行该脚本。脚本需要 Node.js 18 或更高版本，因为它使用了内置 `fetch`。
 
+## 常见问题
+
+如果日志显示已经读取到账号，但请求失败：
+
+```text
+[九号出行签到] start, accounts=1
+[九号出行签到] abcd***wxyz 网络请求失败: ...
+```
+
+说明 `NINEBOT_ACCOUNTS` 已生效，问题出在 Arcadia 运行环境访问九号接口的网络链路。常见原因包括 NAS/Docker 无法访问外网、DNS 解析失败、代理未配置、TLS 证书异常、接口连接超时。
+
+脚本会输出底层错误的 `code`、`hostname`、`address`、`port` 等信息，按错误码排查：
+
+- `ENOTFOUND` / `EAI_AGAIN`：DNS 问题，检查 Arcadia 容器或 NAS 的 DNS。
+- `ETIMEDOUT` / `UND_ERR_CONNECT_TIMEOUT`：连接超时，检查网络出口、代理或防火墙。
+- `ECONNRESET` / `CERT_...`：TLS 或连接被重置，检查代理、证书或运营商网络。
+- `ECONNREFUSED`：目标地址或代理端口拒绝连接。
+
 ## 账号获取
 
 原脚本通过代理工具抓取九号 App 签到接口中的请求头：

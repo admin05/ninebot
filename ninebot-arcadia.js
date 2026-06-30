@@ -15,7 +15,7 @@ const config = {
 };
 
 main().catch(async (error) => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatError(error);
   console.error(`[${SCRIPT_NAME}] failed: ${message}`);
   await pushBark("失败", message);
   process.exitCode = 1;
@@ -39,7 +39,7 @@ async function main() {
       results.push({ account, ok: true, message: result });
       console.log(`[${SCRIPT_NAME}] ${maskDeviceId(account.deviceId)} ${result}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatError(error);
       results.push({ account, ok: false, message });
       console.error(`[${SCRIPT_NAME}] ${maskDeviceId(account.deviceId)} ${message}`);
     }
@@ -91,9 +91,10 @@ async function signAccount(account) {
 async function requestJson(path, account, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  const url = `${config.baseUrl}${path}`;
 
   try {
-    const response = await fetch(`${config.baseUrl}${path}`, {
+    const response = await fetch(url, {
       method: options.method || "GET",
       headers: buildHeaders(account),
       body: options.body,
@@ -111,6 +112,20 @@ async function requestJson(path, account, options = {}) {
     } catch {
       throw new Error(`接口返回不是 JSON: ${text.slice(0, 200)}`);
     }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`请求超时: ${config.timeoutMs}ms ${url}`);
+    }
+
+    if (error instanceof Error && error.message.startsWith("HTTP ")) {
+      throw error;
+    }
+
+    if (error instanceof Error && error.message.startsWith("接口返回不是 JSON")) {
+      throw error;
+    }
+
+    throw new Error(`网络请求失败: ${url} | ${formatError(error)}`);
   } finally {
     clearTimeout(timeout);
   }
@@ -158,7 +173,7 @@ async function pushBark(status, detail) {
       console.warn(`[${SCRIPT_NAME}] Bark 推送失败: HTTP ${response.status} ${text.slice(0, 120)}`);
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatError(error);
     console.warn(`[${SCRIPT_NAME}] Bark 推送失败: ${message}`);
   }
 }
@@ -192,4 +207,30 @@ function maskDeviceId(deviceId) {
 
 function trimText(text, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function formatError(error) {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+
+  const details = [error.message];
+  const cause = error.cause;
+  if (cause && typeof cause === "object") {
+    const detailKeys = ["code", "errno", "syscall", "hostname", "address", "port"];
+    const causeDetails = detailKeys
+      .map((key) => {
+        const value = cause[key];
+        return value === undefined || value === null ? "" : `${key}=${value}`;
+      })
+      .filter(Boolean);
+
+    if (causeDetails.length > 0) {
+      details.push(`cause: ${causeDetails.join(", ")}`);
+    } else if (cause instanceof Error && cause.message) {
+      details.push(`cause: ${cause.message}`);
+    }
+  }
+
+  return details.join(" | ");
 }
