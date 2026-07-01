@@ -10,6 +10,8 @@
 | `BARK` | 否 | Bark key。Arcadia 环境中已配置时会自动推送结果；未配置时只输出日志。 |
 | `NINEBOT_BASE_URL` | 否 | 九号接口地址，默认 `https://cn-cbu-gateway.ninebot.com`。 |
 | `NINEBOT_TIMEOUT_MS` | 否 | 请求超时时间，默认 `15000`。 |
+| `NINEBOT_RETRY_COUNT` | 否 | 九号接口网络错误重试次数，默认 `3`。 |
+| `NINEBOT_RETRY_DELAY_MS` | 否 | 每次重试前等待时间，默认 `1200`。 |
 | `BARK_BASE_URL` | 否 | Bark 服务地址，默认 `https://api.day.app`。 |
 
 `NINEBOT_ACCOUNTS` 示例：
@@ -39,7 +41,7 @@ Arcadia 中建议配置为定时任务运行该脚本。脚本需要 Node.js 18 
 
 说明 `NINEBOT_ACCOUNTS` 已生效，问题出在 Arcadia 运行环境访问九号接口的网络链路。常见原因包括 NAS/Docker 无法访问外网、DNS 解析失败、代理未配置、TLS 证书异常、接口连接超时。
 
-脚本会输出底层错误的 `code`、`hostname`、`address`、`port` 等信息，按错误码排查：
+脚本会对短暂网络错误自动重试，并输出底层错误的 `code`、`hostname`、`address`、`port` 等信息，按错误码排查：
 
 - `ENOTFOUND` / `EAI_AGAIN`：DNS 问题，检查 Arcadia 容器或 NAS 的 DNS。
 - `ETIMEDOUT` / `UND_ERR_CONNECT_TIMEOUT`：连接超时，检查网络出口、代理或防火墙。

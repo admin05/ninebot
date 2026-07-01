@@ -5,11 +5,15 @@
 const SCRIPT_NAME = "九号出行签到";
 const DEFAULT_BASE_URL = "https://cn-cbu-gateway.ninebot.com";
 const DEFAULT_TIMEOUT_MS = 15000;
+const DEFAULT_RETRY_COUNT = 3;
+const DEFAULT_RETRY_DELAY_MS = 1200;
 
 const config = {
   accounts: parseAccounts(process.env.NINEBOT_ACCOUNTS || ""),
   baseUrl: process.env.NINEBOT_BASE_URL || DEFAULT_BASE_URL,
   timeoutMs: Number.parseInt(process.env.NINEBOT_TIMEOUT_MS || "", 10) || DEFAULT_TIMEOUT_MS,
+  retryCount: Number.parseInt(process.env.NINEBOT_RETRY_COUNT || "", 10) || DEFAULT_RETRY_COUNT,
+  retryDelayMs: Number.parseInt(process.env.NINEBOT_RETRY_DELAY_MS || "", 10) || DEFAULT_RETRY_DELAY_MS,
   barkKey: process.env.BARK || "",
   barkBaseUrl: process.env.BARK_BASE_URL || "https://api.day.app",
 };
@@ -89,9 +93,38 @@ async function signAccount(account) {
 }
 
 async function requestJson(path, account, options = {}) {
+  const url = `${config.baseUrl}${path}`;
+  const maxAttempts = Math.max(1, config.retryCount);
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fetchJsonOnce(url, account, options);
+    } catch (error) {
+      lastError = error;
+      if (error instanceof NonRetryableError) {
+        throw error;
+      }
+
+      if (!isRetryableNetworkError(error) || attempt >= maxAttempts) {
+        break;
+      }
+
+      console.warn(
+        `[${SCRIPT_NAME}] ${maskDeviceId(account.deviceId)} 请求失败，${config.retryDelayMs}ms 后重试 ` +
+          `(${attempt}/${maxAttempts}): ${formatError(error)}`,
+      );
+      await sleep(config.retryDelayMs);
+    }
+  }
+
+  const message = formatError(lastError);
+  throw new Error(`网络请求失败: ${url} | 重试${maxAttempts}次后仍失败 | ${message}`);
+}
+
+async function fetchJsonOnce(url, account, options) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-  const url = `${config.baseUrl}${path}`;
 
   try {
     const response = await fetch(url, {
@@ -104,31 +137,60 @@ async function requestJson(path, account, options = {}) {
 
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+      throw new NonRetryableError(`HTTP ${response.status}: ${text.slice(0, 200)}`);
     }
 
     try {
       return JSON.parse(text);
     } catch {
-      throw new Error(`接口返回不是 JSON: ${text.slice(0, 200)}`);
+      throw new NonRetryableError(`接口返回不是 JSON: ${text.slice(0, 200)}`);
     }
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error(`请求超时: ${config.timeoutMs}ms ${url}`);
     }
 
-    if (error instanceof Error && error.message.startsWith("HTTP ")) {
-      throw error;
-    }
-
-    if (error instanceof Error && error.message.startsWith("接口返回不是 JSON")) {
-      throw error;
-    }
-
-    throw new Error(`网络请求失败: ${url} | ${formatError(error)}`);
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+class NonRetryableError extends Error {}
+
+function isRetryableNetworkError(error) {
+  if (error instanceof NonRetryableError) {
+    return false;
+  }
+
+  const retryableCodes = new Set([
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_SOCKET",
+  ]);
+  const code = getErrorCode(error);
+  return code ? retryableCodes.has(code) : true;
+}
+
+function getErrorCode(error) {
+  if (!error || typeof error !== "object") {
+    return "";
+  }
+
+  if (typeof error.code === "string") {
+    return error.code;
+  }
+
+  const cause = error.cause;
+  if (cause && typeof cause === "object" && typeof cause.code === "string") {
+    return cause.code;
+  }
+
+  return "";
 }
 
 function buildHeaders(account) {
@@ -207,6 +269,10 @@ function maskDeviceId(deviceId) {
 
 function trimText(text, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatError(error) {
